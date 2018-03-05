@@ -7,7 +7,7 @@ PREFIX ?= sh-elf
 
 #possible choices : SH7058 SH7055_18 SH7055_35
 #try "make BUILDWHAT=SH7055_18" to override this default.
-BUILDWHAT ?= SH7058
+BUILDWHAT ?= SH7055_18
 
 # Specify compiler to be used
 CC = $(PREFIX)-gcc

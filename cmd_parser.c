@@ -271,7 +271,7 @@ static void cmd_startcomm(void) {
 }
 
 /* dump command processor, called from cmd_loop.
- * args[0] : address space (0: EEPROM, 1: ROM)
+ * args[0] : address space (0: EEPROM 93cxx, 1: ROM)
  * args[1,2] : # of 32-byte blocks
  * args[3,4] : (address / 32)
  *
@@ -479,6 +479,83 @@ exit_bad:
 	return;
 }
 
+/* EEPROM manipulations */
+static void cmd_ee(struct iso14230_msg *msg) {
+	
+	uint8_t action;
+	uint16_t addr, data;
+	uint32_t dwdata;
+	uint8_t repl[134];
+		
+	if ((msg->datalen != 132) && (msg->datalen != 4) && (msg->datalen != 6) && (msg->datalen != 8))  {
+		tx_7F(SID_EEPROM, 0x12);
+		return;
+	}
+	
+	action = msg->data[1];
+	addr = ((msg->data[2] << 8) & 0xFF00) | msg->data[3];
+	repl[0] = SID_EEPROM + 0x40;
+			
+	switch (action) {
+	
+	case SID_EE_RD16:
+		eep_read16(addr, &data); 
+		repl[1] = (uint8_t) (data >> 8) & 0xFF;
+		repl[2] = (uint8_t) data & 0xFF;
+		iso_sendpkt(repl, 3);
+		break;
+		
+	case SID_EE_WR16:
+		if(msg->datalen == 6) {
+			data = msg->data[5] | ((msg->data[4] << 8) & 0xFF00);
+			eep_write16(addr, &data);
+			iso_sendpkt(repl, 1);
+		} else {
+			tx_7F(SID_EEPROM, 0x12);
+		}
+		break;
+		
+	case SID_EE_RD32:
+		eep_read32(addr, &dwdata); 
+		repl[1] = (uint8_t) (dwdata >> 24) & 0xFF;
+		repl[2] = (uint8_t) (dwdata >> 16) & 0xFF;
+		repl[3] = (uint8_t) (dwdata >> 8) & 0xFF;
+		repl[4] = (uint8_t) dwdata & 0xFF;
+		iso_sendpkt(repl, 5);
+		break;
+		
+	case SID_EE_WR32:
+		if ((msg->datalen == 8) && (((addr & 0xFFE0) == addr) || ((addr & (~0xFFE0)) >= 4))) {
+			dwdata =	((uint32_t) (msg->data[4] << 24) & 0xFF000000) |
+						((uint32_t) (msg->data[5] << 16) & 0xFF0000) | 
+						((uint32_t) (msg->data[6] << 8) & 0xFF00) | 
+						((uint32_t) (msg->data[7]) & 0xFF); 
+			eep_write32(addr, &dwdata);
+			iso_sendpkt(repl, 1);
+		} else {
+			tx_7F(SID_EEPROM, 0x12);
+		}
+		break;
+	
+	case SID_EE_RD128:
+		eep_readBlock(addr, &repl[1]); 
+		iso_sendpkt(repl, 129);
+		break;
+	
+	case SID_EE_WR128:
+		if ((addr % 32 == 0) && (msg->datalen == 132)) {
+			eep_writeBlock(addr, &msg->data[4]);
+			iso_sendpkt(repl, 1);
+		} else {
+			tx_7F(SID_EEPROM, 0x12);
+		}
+		break;
+	default:
+		tx_7F(SID_EEPROM, 0x12);
+		break;
+	} // switch action
+}
+
 
 /* ReadMemByAddress */
 void cmd_rmba(struct iso14230_msg *msg) {
@@ -571,7 +648,15 @@ static void cmd_conf(struct iso14230_msg *msg) {
 		/* set eeprom_read() function address <SID_CONF> <SID_CONF_SETEEPR> <AH> <AM> <AL> */
 		if (msg->datalen != 5) goto bad12;
 		tmp = (msg->data[2] << 16) | (msg->data[3] << 8) | msg->data[4];
-		eep_setptr((void *) tmp);
+		eep_setrdptr((void *) tmp);
+		iso_sendpkt(resp, 1);
+		return;
+		break;
+	case SID_CONF_SETEEPW:
+		/* set eeprom_write() function address <SID_CONF> <SID_CONF_SETEEPW> <AH> <AM> <AL> */
+		if (msg->datalen != 5) goto bad12;
+		tmp = (msg->data[2] << 16) | (msg->data[3] << 8) | msg->data[4];
+		eep_setwrptr((void *) tmp);
 		iso_sendpkt(resp, 1);
 		return;
 		break;
@@ -583,7 +668,7 @@ static void cmd_conf(struct iso14230_msg *msg) {
 		if (cmd_romcrc(&msg->data[2])) {
 			tx_7F(SID_CONF, SID_CONF_CKS1_BADCKS);
 			return;
-		}
+		}	
 		iso_sendpkt(resp, 1);
 		return;
 		break;
@@ -715,6 +800,10 @@ void cmd_loop(void) {
 				break;
 			case SID_FLREQ:
 				cmd_flash_init();
+				iso_clearmsg(&msg);
+				break;
+			case SID_EEPROM:
+				cmd_ee(&msg);
 				iso_clearmsg(&msg);
 				break;
 			default:
